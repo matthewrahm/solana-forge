@@ -1,0 +1,21 @@
+[package]
+name = "forge-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+forge-ingest = { path = "../forge-ingest" }
+forge-parse = { path = "../forge-parse" }
+forge-store = { path = "../forge-store" }
+forge-api = { path = "../forge-api" }
+
+clap = { version = "4", features = ["derive"] }
+dotenvy = "0.15"
+axum = "0.8"

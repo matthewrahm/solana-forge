@@ -1,0 +1,15 @@
+[package]
+name = "forge-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "json"] }
+forge-parse = { path = "../forge-parse" }
