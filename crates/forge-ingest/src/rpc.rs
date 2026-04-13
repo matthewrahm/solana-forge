@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::HashSet;
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Raw transaction data from the RPC
 #[derive(Debug, Clone, Deserialize)]
@@ -119,32 +120,46 @@ impl RpcClient {
         }
     }
 
-    /// Batch fetch transactions from a channel of signatures.
-    /// Collects signatures for `batch_window_ms`, then fetches them concurrently.
+    /// Batch fetch transactions with rate limiting.
+    /// Processes up to `max_per_second` requests per second to stay within API limits.
     pub async fn batch_fetch(
         &self,
         mut sig_rx: mpsc::Receiver<String>,
         tx_out: mpsc::Sender<RawTransaction>,
-        max_concurrent: usize,
+        max_per_second: u32,
     ) {
-        // Simple approach: fetch each signature as it arrives, with concurrency limit
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+        let mut seen = HashSet::new();
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(
+            1000 / max_per_second as u64,
+        ));
+
+        let mut fetched: u64 = 0;
 
         while let Some(signature) = sig_rx.recv().await {
-            let permit = semaphore.clone().acquire_owned().await;
+            // Dedup — same tx can appear from multiple program subscriptions
+            if !seen.insert(signature.clone()) {
+                continue;
+            }
+
+            // Keep seen set bounded
+            if seen.len() > 10_000 {
+                seen.clear();
+            }
+
+            // Rate limit
+            interval.tick().await;
+
             let client = self.client.clone();
             let rpc_url = self.rpc_url.clone();
             let tx_out = tx_out.clone();
 
             tokio::spawn(async move {
-                let _permit = permit;
                 let rpc = RpcClient { client, rpc_url };
 
                 match rpc.get_transaction(&signature).await {
                     Ok(Some(raw_tx)) => {
                         // Skip failed transactions
                         if raw_tx.meta.as_ref().and_then(|m| m.err.as_ref()).is_some() {
-                            debug!("Skipping failed tx: {}", signature);
                             return;
                         }
 
@@ -152,14 +167,17 @@ impl RpcClient {
                             warn!("Output channel closed");
                         }
                     }
-                    Ok(None) => {
-                        debug!("Transaction not found: {}", signature);
-                    }
+                    Ok(None) => {}
                     Err(e) => {
-                        warn!("Failed to fetch tx {}: {}", signature, e);
+                        debug!("Failed to fetch tx {}: {}", signature, e);
                     }
                 }
             });
+
+            fetched += 1;
+            if fetched.is_multiple_of(50) {
+                info!("Fetched {} transactions from RPC", fetched);
+            }
         }
     }
 }

@@ -25,6 +25,10 @@ struct Args {
     /// API server port
     #[arg(short, long, default_value = "3001")]
     port: u16,
+
+    /// Max RPC requests per second (stay within your Helius plan)
+    #[arg(long, default_value = "5")]
+    rpc_rate: u32,
 }
 
 #[tokio::main]
@@ -34,7 +38,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "solana_forge=info,forge=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "forge=info,tower_http=info".into()),
         )
         .init();
 
@@ -56,82 +60,139 @@ async fn main() -> Result<()> {
     forge_store::run_migrations(&pool).await?;
     info!("Database ready");
 
-    // Channels for the pipeline: WebSocket -> RPC Fetcher -> Parser -> Store
+    // Channels for the pipeline
     let (sig_tx, sig_rx) = mpsc::channel::<String>(5000);
     let (raw_tx, mut raw_rx) = mpsc::channel::<RawTransaction>(1000);
 
     let rpc_url = format!("https://mainnet.helius-rpc.com/?api-key={api_key}");
     let ws_url = format!("wss://mainnet.helius-rpc.com/?api-key={api_key}");
 
+    // Start API server first so it's immediately available
+    let api_pool = pool.clone();
+    let api_port = args.port;
+    tokio::spawn(async move {
+        info!("Starting API server on http://localhost:{}", api_port);
+        let app = forge_api::build_router(api_pool);
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port))
+            .await
+            .expect("Failed to bind API port");
+        axum::serve(listener, app)
+            .await
+            .expect("API server crashed");
+    });
+
     // Stage 1: WebSocket listener — discovers transaction signatures
+    // Only subscribe to swap-producing programs (not Token Program — too much volume)
     let ws_url_clone = ws_url.clone();
     let sig_tx_clone = sig_tx.clone();
     tokio::spawn(async move {
-        let programs = forge_ingest::programs::all();
-        let program_refs: Vec<&str> = programs.to_vec();
+        let programs = vec![
+            forge_parse::RAYDIUM_AMM_V4,
+            forge_parse::JUPITER_V6,
+            forge_parse::PUMPFUN,
+        ];
         loop {
-            info!("Starting WebSocket listener...");
+            info!("Connecting to Solana WebSocket...");
             if let Err(e) = forge_ingest::websocket::subscribe_logs(
                 &ws_url_clone,
-                &program_refs,
+                &programs,
                 sig_tx_clone.clone(),
             )
             .await
             {
-                error!("WebSocket error: {}. Reconnecting in 5s...", e);
+                error!("WebSocket disconnected: {}. Reconnecting in 5s...", e);
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         }
     });
 
-    // Stage 2: RPC batch fetcher — fetches full transaction data
+    // Stage 2: RPC fetcher with rate limiting
+    let rpc_rate = args.rpc_rate;
     let rpc_client = RpcClient::new(&rpc_url);
     tokio::spawn(async move {
-        rpc_client.batch_fetch(sig_rx, raw_tx, 10).await;
+        info!("RPC fetcher started (rate limit: {}/s)", rpc_rate);
+        rpc_client.batch_fetch(sig_rx, raw_tx, rpc_rate).await;
     });
 
-    // Stage 3: Parser + Store — decode and persist
+    // Stage 3: Parser + Store
     let store_pool = pool.clone();
-    tokio::spawn(async move {
-        let mut event_count: u64 = 0;
+    let mut event_count: u64 = 0;
 
-        while let Some(raw) = raw_rx.recv().await {
-            let slot = raw.slot.unwrap_or(0);
-            let block_time = raw.block_time.unwrap_or(0);
-            let fee = raw.meta.as_ref().and_then(|m| m.fee).unwrap_or(0);
+    info!("Pipeline running. Waiting for transactions...");
+    info!("API available at http://localhost:{}", args.port);
+    info!("  GET /api/v1/swaps");
+    info!("  GET /api/v1/transfers");
+    info!("  GET /api/v1/stats");
+    info!("  GET /api/v1/health");
 
-            let tx_json = raw.transaction.unwrap_or(serde_json::Value::Null);
-            let meta_json = serde_json::to_value(&raw.meta).unwrap_or(serde_json::Value::Null);
+    while let Some(raw) = raw_rx.recv().await {
+        let slot = raw.slot.unwrap_or(0);
+        let block_time = raw.block_time.unwrap_or(0);
+        let fee = raw.meta.as_ref().and_then(|m| m.fee).unwrap_or(0);
 
-            let events: Vec<ParsedEvent> = decoder::decode_transaction(
-                &raw.signature,
-                slot,
-                block_time,
-                fee,
-                &tx_json,
-                &meta_json,
-            );
+        let tx_json = raw.transaction.unwrap_or(serde_json::Value::Null);
+        let meta_json = serde_json::to_value(&raw.meta).unwrap_or(serde_json::Value::Null);
 
-            if !events.is_empty() {
-                event_count += events.len() as u64;
+        let events: Vec<ParsedEvent> = decoder::decode_transaction(
+            &raw.signature,
+            slot,
+            block_time,
+            fee,
+            &tx_json,
+            &meta_json,
+        );
 
-                if let Err(e) = forge_store::queries::insert_events(&store_pool, &events).await {
-                    error!("Failed to store events: {}", e);
-                }
+        if !events.is_empty() {
+            event_count += events.len() as u64;
 
-                if event_count.is_multiple_of(10) {
-                    info!("Total events indexed: {}", event_count);
+            for event in &events {
+                match event {
+                    ParsedEvent::Swap(swap) => {
+                        info!(
+                            "SWAP [{}] {} -> {} on {}",
+                            &swap.signature[..8],
+                            short_mint(&swap.token_in.mint),
+                            short_mint(&swap.token_out.mint),
+                            swap.platform.as_str()
+                        );
+                    }
+                    ParsedEvent::Transfer(transfer) => {
+                        info!(
+                            "TRANSFER [{}] {} {} -> {}",
+                            &transfer.signature[..8],
+                            short_mint(&transfer.mint),
+                            short_addr(&transfer.from),
+                            short_addr(&transfer.to)
+                        );
+                    }
                 }
             }
-        }
-    });
 
-    // Stage 4: API server
-    info!("Starting API server on port {}...", args.port);
-    let app = forge_api::build_router(pool);
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
-    info!("API server listening on http://localhost:{}", args.port);
-    axum::serve(listener, app).await?;
+            if let Err(e) = forge_store::queries::insert_events(&store_pool, &events).await {
+                error!("Failed to store: {}", e);
+            }
+
+            if event_count.is_multiple_of(25) {
+                info!("--- Total indexed: {} events ---", event_count);
+            }
+        }
+    }
 
     Ok(())
+}
+
+fn short_mint(mint: &str) -> String {
+    if mint.len() > 8 {
+        format!("{}..{}", &mint[..4], &mint[mint.len() - 4..])
+    } else {
+        mint.to_string()
+    }
+}
+
+fn short_addr(addr: &str) -> String {
+    if addr.len() > 8 {
+        format!("{}..{}", &addr[..4], &addr[addr.len() - 4..])
+    } else {
+        addr.to_string()
+    }
 }
