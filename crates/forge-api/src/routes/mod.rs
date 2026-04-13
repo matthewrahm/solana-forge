@@ -1,6 +1,7 @@
 mod stats;
 mod swaps;
 mod transfers;
+pub mod ws;
 
 use axum::Router;
 use sqlx::PgPool;

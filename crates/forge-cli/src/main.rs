@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
 
 use forge_ingest::rpc::{RawTransaction, RpcClient};
@@ -60,6 +60,9 @@ async fn main() -> Result<()> {
     forge_store::run_migrations(&pool).await?;
     info!("Database ready");
 
+    // Broadcast channel for real-time event streaming to WebSocket clients
+    let (event_tx, _) = broadcast::channel::<String>(1000);
+
     // Channels for the pipeline
     let (sig_tx, sig_rx) = mpsc::channel::<String>(5000);
     let (raw_tx, mut raw_rx) = mpsc::channel::<RawTransaction>(1000);
@@ -70,9 +73,10 @@ async fn main() -> Result<()> {
     // Start API server first so it's immediately available
     let api_pool = pool.clone();
     let api_port = args.port;
+    let api_event_tx = event_tx.clone();
     tokio::spawn(async move {
         info!("Starting API server on http://localhost:{}", api_port);
-        let app = forge_api::build_router(api_pool);
+        let app = forge_api::build_router(api_pool, api_event_tx);
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port))
             .await
             .expect("Failed to bind API port");
@@ -124,6 +128,7 @@ async fn main() -> Result<()> {
     info!("  GET /api/v1/transfers");
     info!("  GET /api/v1/stats");
     info!("  GET /api/v1/health");
+    info!("  WS  /ws/events");
 
     while let Some(raw) = raw_rx.recv().await {
         let slot = raw.slot.unwrap_or(0);
@@ -165,6 +170,13 @@ async fn main() -> Result<()> {
                             short_addr(&transfer.to)
                         );
                     }
+                }
+            }
+
+            // Broadcast events to WebSocket clients
+            for event in &events {
+                if let Ok(json) = serde_json::to_string(event) {
+                    let _ = event_tx.send(json);
                 }
             }
 
