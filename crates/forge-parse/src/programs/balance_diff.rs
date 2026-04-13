@@ -1,6 +1,6 @@
 use crate::types::{Platform, SwapEvent, TokenAmount};
 use chrono::DateTime;
-use tracing::{debug, trace};
+use tracing::debug;
 
 /// Parse a swap using the balance-diff strategy.
 /// Compares pre/post token balances to find what the signer sent and received.
@@ -17,14 +17,6 @@ pub fn parse_swap(
     let post_raw = meta.get("postTokenBalances")?;
     let pre_balances = parse_token_balances(pre_raw);
     let post_balances = parse_token_balances(post_raw);
-
-    trace!(
-        sig = &signature[..8],
-        pre_count = pre_balances.len(),
-        post_count = post_balances.len(),
-        fee_payer = &fee_payer[..8.min(fee_payer.len())],
-        "Balance diff: parsed token balances"
-    );
 
     // Find tokens where the fee_payer's balance changed
     let mut sent: Option<TokenAmount> = None;
@@ -110,14 +102,6 @@ pub fn parse_swap(
             }
         }
     }
-
-    trace!(
-        sig = &signature[..8],
-        has_sent = sent.is_some(),
-        has_received = received.is_some(),
-        balance_changes = balance_changes.len(),
-        "Balance diff: swap detection result"
-    );
 
     let (token_in, token_out) = match (sent, received) {
         (Some(s), Some(r)) => (s, r),

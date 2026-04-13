@@ -1,6 +1,6 @@
 use crate::programs;
 use crate::types::ParsedEvent;
-use tracing::{debug, trace};
+use tracing::debug;
 
 /// Decode a raw transaction JSON into parsed events.
 /// Uses the balance-diff strategy for swaps and instruction parsing for transfers.
@@ -29,16 +29,6 @@ pub fn decode_transaction(
         .any(|l| l.contains(crate::RAYDIUM_AMM_V4));
     let has_jupiter = log_messages.iter().any(|l| l.contains(crate::JUPITER_V6));
     let has_pumpfun = log_messages.iter().any(|l| l.contains(crate::PUMPFUN));
-
-    trace!(
-        sig = &signature[..8],
-        logs = log_messages.len(),
-        has_raydium,
-        has_jupiter,
-        has_pumpfun,
-        fee_payer = &fee_payer[..8.min(fee_payer.len())],
-        "Decoding transaction"
-    );
 
     // Parse swaps using balance-diff strategy
     if has_raydium || has_jupiter || has_pumpfun {

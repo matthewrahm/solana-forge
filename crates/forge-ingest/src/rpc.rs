@@ -18,42 +18,6 @@ pub struct RawTransaction {
     pub transaction: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransactionMeta {
-    pub err: Option<serde_json::Value>,
-    pub fee: Option<u64>,
-    #[serde(default)]
-    pub pre_balances: Vec<u64>,
-    #[serde(default)]
-    pub post_balances: Vec<u64>,
-    #[serde(default)]
-    pub pre_token_balances: Vec<TokenBalance>,
-    #[serde(default)]
-    pub post_token_balances: Vec<TokenBalance>,
-    #[serde(default)]
-    pub inner_instructions: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub log_messages: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TokenBalance {
-    pub account_index: Option<u8>,
-    pub mint: Option<String>,
-    pub owner: Option<String>,
-    pub ui_token_amount: Option<UiTokenAmount>,
-}
-
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UiTokenAmount {
-    pub amount: Option<String>,
-    pub decimals: Option<u8>,
-    pub ui_amount: Option<f64>,
-}
-
 #[derive(Deserialize)]
 struct RpcResponse {
     result: Option<serde_json::Value>,
