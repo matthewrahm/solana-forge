@@ -4,14 +4,15 @@ use std::collections::HashSet;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-/// Raw transaction data from the RPC
+/// Raw transaction data from the RPC — meta kept as raw JSON
+/// so the parser can access original camelCase field names directly
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawTransaction {
     pub signature: String,
     pub slot: Option<u64>,
     #[serde(rename = "blockTime")]
     pub block_time: Option<i64>,
-    pub meta: Option<TransactionMeta>,
+    pub meta: Option<serde_json::Value>,
     pub transaction: Option<serde_json::Value>,
 }
 
@@ -159,7 +160,12 @@ impl RpcClient {
                 match rpc.get_transaction(&signature).await {
                     Ok(Some(raw_tx)) => {
                         // Skip failed transactions
-                        if raw_tx.meta.as_ref().and_then(|m| m.err.as_ref()).is_some() {
+                        let has_error = raw_tx
+                            .meta
+                            .as_ref()
+                            .and_then(|m| m.get("err"))
+                            .is_some_and(|e| !e.is_null());
+                        if has_error {
                             return;
                         }
 

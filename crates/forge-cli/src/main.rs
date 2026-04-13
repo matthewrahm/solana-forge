@@ -128,10 +128,10 @@ async fn main() -> Result<()> {
     while let Some(raw) = raw_rx.recv().await {
         let slot = raw.slot.unwrap_or(0);
         let block_time = raw.block_time.unwrap_or(0);
-        let fee = raw.meta.as_ref().and_then(|m| m.fee).unwrap_or(0);
+        let meta_json = raw.meta.unwrap_or(serde_json::Value::Null);
+        let fee = meta_json.get("fee").and_then(|f| f.as_u64()).unwrap_or(0);
 
         let tx_json = raw.transaction.unwrap_or(serde_json::Value::Null);
-        let meta_json = serde_json::to_value(&raw.meta).unwrap_or(serde_json::Value::Null);
 
         let events: Vec<ParsedEvent> = decoder::decode_transaction(
             &raw.signature,
