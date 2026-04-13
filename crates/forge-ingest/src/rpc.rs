@@ -5,9 +5,11 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 /// Raw transaction data from the RPC — meta kept as raw JSON
-/// so the parser can access original camelCase field names directly
+/// so the parser can access original camelCase field names directly.
+/// `signature` is not part of the RPC response — it's set after deserialization.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawTransaction {
+    #[serde(default)]
     pub signature: String,
     pub slot: Option<u64>,
     #[serde(rename = "blockTime")]
