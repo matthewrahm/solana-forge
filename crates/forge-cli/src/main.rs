@@ -94,6 +94,7 @@ async fn main() -> Result<()> {
             forge_parse::RAYDIUM_AMM_V4,
             forge_parse::JUPITER_V6,
             forge_parse::PUMPFUN,
+            forge_parse::PUMPSWAP,
         ];
         loop {
             info!("Connecting to Solana WebSocket...");

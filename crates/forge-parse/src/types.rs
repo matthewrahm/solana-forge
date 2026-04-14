@@ -49,6 +49,7 @@ pub enum Platform {
     Raydium,
     Jupiter,
     PumpFun,
+    PumpSwap,
     Unknown,
 }
 
@@ -58,6 +59,7 @@ impl Platform {
             Platform::Raydium => "raydium",
             Platform::Jupiter => "jupiter",
             Platform::PumpFun => "pumpfun",
+            Platform::PumpSwap => "pumpswap",
             Platform::Unknown => "unknown",
         }
     }

@@ -121,6 +121,8 @@ pub fn parse_swap(
         Platform::Jupiter
     } else if logs.iter().any(|l| l.contains(crate::RAYDIUM_AMM_V4)) {
         Platform::Raydium
+    } else if logs.iter().any(|l| l.contains(crate::PUMPSWAP)) {
+        Platform::PumpSwap
     } else if logs.iter().any(|l| l.contains(crate::PUMPFUN)) {
         Platform::PumpFun
     } else {
